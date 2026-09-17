@@ -1,0 +1,32 @@
+# LLM / agente
+langchain
+langchain-openai
+langchain-text-splitters
+openai
+
+# Persistencia (Supabase / PostgreSQL / pgvector)
+supabase
+
+# Ingesta de conocimiento (conocimiento.pdf)
+pypdf
+
+# busqueda_internet (proveedor: Tavily)
+tavily-python
+
+# Configuración
+python-dotenv
+
+# Utilidades LLM
+tiktoken
+
+# Resiliencia (reintentos en llamadas de red)
+tenacity
+requests
+
+# API web (MVP)
+fastapi
+uvicorn[standard]
+
+# Testing
+pytest
+httpx

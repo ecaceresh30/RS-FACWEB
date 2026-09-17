@@ -1,0 +1,81 @@
+Instrucciones para levantar el entorno de desarrollo desde cero (Windows / PowerShell)
+=======================================================================================
+
+Requisito previo: Python 3.12 instalado (verificar con `py -0`; debe listar 3.12).
+Si no aparece, instalar con:
+    winget install --id Python.Python.3.12 -e
+
+1) Crear el entorno virtual (si no existe ya .venv en la raiz del proyecto):
+    py -3.12 -m venv .venv
+
+2) Activar el entorno virtual:
+    .venv\Scripts\Activate.ps1
+
+   (Si PowerShell bloquea la ejecucion de scripts, ejecutar una vez como el usuario actual:
+    Set-ExecutionPolicy -Scope CurrentUser RemoteSigned)
+
+3) Instalar las dependencias:
+    pip install -r requirements.txt
+
+4) Configurar las variables de entorno:
+    copy .env.example .env
+   Luego completar en .env: OPENAI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
+   TAVILY_API_KEY habilita la tool busqueda_internet (https://tavily.com); si se deja
+   vacia, la tool responde que no esta configurada en vez de fallar.
+   consultar_api_externa usa OpenRuc (https://openruc.com), endpoint fijo sin
+   autenticacion - no requiere variables de entorno.
+   LANGSMITH_TRACING=true + LANGSMITH_API_KEY habilitan trazas de observabilidad
+   en https://smith.langchain.com (opcional; enviar datos a un servicio externo,
+   dejar vacio si no se quiere usar).
+
+4.1) Aplicar el esquema de base de datos en Supabase (en este orden):
+    - supabase/migrations/0001_usuarios_conversaciones_mensajes.sql
+    - supabase/migrations/0002_pgvector_documentos.sql
+    Copiar cada archivo y ejecutarlo en el SQL editor de Supabase Studio
+    (Project > SQL Editor > New query), o usar `supabase db push` si usas la Supabase CLI
+    con el proyecto vinculado.
+
+5) Ingestar la base de conocimiento (una vez aplicada la migracion 0002):
+    Colocar el archivo conocimiento.pdf en app/knowledge/conocimiento.pdf y ejecutar:
+    python -m app.knowledge.ingest
+
+6) Ejecutar la aplicacion:
+    - CLI (terminal interactiva): python -m app.main
+    - API web + frontend (MVP):   uvicorn app.api:app --reload
+      Abrir http://127.0.0.1:8000 en el navegador.
+
+7) Ejecutar los tests:
+    pytest
+
+=======================================================================================
+Docker (build y prueba local)
+=======================================================================================
+
+1) Construir la imagen:
+    docker build -t demo-ia:mvp .
+
+2) Correr el contenedor (usa el mismo .env local, no se hornean secretos en la imagen):
+    docker run -d --name demo-ia --env-file .env -p 8000:8000 demo-ia:mvp
+
+3) Verificar:
+    curl http://127.0.0.1:8000/api/health
+
+=======================================================================================
+Deploy en el VPS (DigitalOcean) - MVP, HTTP simple sin dominio/TLS
+=======================================================================================
+
+1) En el VPS: instalar Docker (si no esta):
+    curl -fsSL https://get.docker.com | sh
+
+2) Copiar el proyecto al VPS (git clone del repo, o scp) y el archivo .env
+   (NUNCA subir .env a git - copiarlo aparte, ej. `scp .env usuario@vps:/ruta/proyecto/`).
+
+3) En el VPS, dentro de la carpeta del proyecto:
+    docker build -t demo-ia:mvp .
+    docker run -d --name demo-ia --restart unless-stopped --env-file .env -p 80:8000 demo-ia:mvp
+
+4) Probar desde tu maquina: http://<IP_DEL_VPS>/
+
+Nota: esto deja el servicio en HTTP plano en el puerto 80, suficiente para probar
+el MVP. Para un dominio propio + HTTPS mas adelante, se agrega un reverse proxy
+(Caddy o nginx) delante del contenedor - no incluido en este MVP.

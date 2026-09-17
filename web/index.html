@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Asistente Empresarial · Consulta RUC</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__brand">
+      <span class="topbar__logo">RUC</span>
+      <div>
+        <div class="topbar__title">Asistente Empresarial</div>
+        <div class="topbar__subtitle">Consultas SUNAT &middot; RUC &middot; Base de conocimiento</div>
+      </div>
+    </div>
+    <div id="empresa-badge" class="topbar__empresa" hidden></div>
+  </header>
+
+  <main class="content">
+    <section id="login-view" class="card login-card">
+      <h1>Ingresa tu RUC para comenzar</h1>
+      <p class="muted">
+        Validamos tu RUC contra SUNAT (vía OpenRuc). Si es la primera vez, te registramos
+        automáticamente; si ya existe, retomamos tu conversación anterior.
+      </p>
+      <form id="login-form">
+        <label for="ruc-input">RUC (11 dígitos)</label>
+        <input
+          id="ruc-input"
+          name="ruc"
+          inputmode="numeric"
+          pattern="\d{11}"
+          maxlength="11"
+          placeholder="20100047218"
+          autocomplete="off"
+          required
+        />
+        <button type="submit">Ingresar</button>
+      </form>
+      <p id="login-error" class="error" hidden></p>
+    </section>
+
+    <section id="chat-view" class="card chat-card" hidden>
+      <div id="chat-messages" class="chat-messages" aria-live="polite"></div>
+      <form id="chat-form" class="chat-form">
+        <input
+          id="chat-input"
+          type="text"
+          placeholder="Escribe tu mensaje... (ej. busca el ruc 20131312955)"
+          autocomplete="off"
+        />
+        <button type="submit">Enviar</button>
+      </form>
+    </section>
+  </main>
+
+  <footer class="footer">MVP &middot; Agente conversacional empresarial</footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# Entorno virtual
+.venv/
+
+# Secretos (usar .env.example como plantilla)
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Herramientas locales
+.claude/
