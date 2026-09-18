@@ -7,8 +7,10 @@ openai
 # Persistencia (Supabase / PostgreSQL / pgvector)
 supabase
 
-# Ingesta de conocimiento (conocimiento.pdf)
+# Ingesta de conocimiento (conocimiento.pdf) y generacion del PDF de
+# recomendaciones de cartera/factoring
 pypdf
+fpdf2
 
 # busqueda_internet (proveedor: Tavily)
 tavily-python

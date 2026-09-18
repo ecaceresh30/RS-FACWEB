@@ -240,6 +240,58 @@ def test_procesar_turno_normal_question_uses_agent(mock_retrieve_context, mock_m
 
 @patch("app.conversation.conversation_repository")
 @patch("app.conversation.message_repository")
+@patch("app.conversation.obtener_contexto_recomendaciones")
+@patch("app.conversation.obtener_resumen_cartera")
+@patch("app.conversation.retrieve_context")
+def test_procesar_turno_cartera_question_injects_resumen_into_agent_call(
+    mock_retrieve_context,
+    mock_obtener_resumen_cartera,
+    mock_obtener_contexto_recomendaciones,
+    mock_message_repo,
+    mock_conv_repo,
+):
+    mock_retrieve_context.return_value = ("algo irrelevante", [{"source": "conocimiento.pdf"}])
+    mock_obtener_resumen_cartera.return_value = "Monto total pendiente: S/ 1,000.00"
+    mock_obtener_contexto_recomendaciones.return_value = (
+        "contenido completo de recomendaciones",
+        [{"source": "recomendaciones_cartera.pdf", "page": 1}],
+    )
+    agent = MagicMock()
+    agent.invoke.return_value = {"messages": [MagicMock(content="Tu cartera esta sana.")]}
+    sesion = _fake_sesion(agent=agent)
+
+    resultado = procesar_turno(sesion, "como esta mi cartera?")
+
+    assert resultado.respuesta.startswith("Tu cartera esta sana.")
+    mock_obtener_resumen_cartera.assert_called_once_with("20100047218")
+    invoke_args = agent.invoke.call_args[0][0]
+    contenido = invoke_args["messages"][-1]["content"]
+    assert "Datos de tu cartera de cuentas por cobrar" in contenido
+    # El contexto completo de recomendaciones reemplaza al top-K generico.
+    assert "contenido completo de recomendaciones" in contenido
+    assert "algo irrelevante" not in contenido
+    assert "Fuente: recomendaciones_cartera.pdf, pag. 1" in resultado.respuesta
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
+@patch("app.conversation.retrieve_context")
+def test_procesar_turno_without_cartera_keyword_skips_cartera_lookup(
+    mock_retrieve_context, mock_message_repo, mock_conv_repo
+):
+    mock_retrieve_context.return_value = ("", [])
+    agent = MagicMock()
+    agent.invoke.return_value = {"messages": [MagicMock(content="Hola!")]}
+    sesion = _fake_sesion(agent=agent)
+
+    procesar_turno(sesion, "hola")
+
+    invoke_args = agent.invoke.call_args[0][0]
+    assert "Datos de tu cartera" not in invoke_args["messages"][-1]["content"]
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
 @patch("app.conversation.consultar_ruc", side_effect=RuntimeError("boom"))
 def test_procesar_turno_ruc_search_error_raises_turno_error(mock_consultar_ruc, mock_message_repo, mock_conv_repo):
     sesion = _fake_sesion(agent=MagicMock())

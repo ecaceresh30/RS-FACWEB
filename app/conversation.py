@@ -14,6 +14,11 @@ from app.agent.agent import build_agent, wants_internet_search
 from app.db import conversation_repository, message_repository, user_repository
 from app.tools.buscar_conocimiento import retrieve_context
 from app.tools.consultar_api_externa import consultar_ruc
+from app.tools.consultar_cartera import (
+    obtener_contexto_recomendaciones,
+    obtener_resumen_cartera,
+    wants_cartera_consulta,
+)
 
 RUC_PATTERN = re.compile(r"^\d{11}$")
 RUC_SEARCH_PATTERN = re.compile(r"busca\s+(?:al\s+|el\s+)?ruc\s+(\d{11})", re.IGNORECASE)
@@ -70,23 +75,26 @@ def cargar_historial(conversacion_id: str) -> list[dict]:
     ]
 
 
-def _build_augmented_user_message(user_input: str, contexto: str) -> dict:
-    """Inyecta el contexto recuperado de la base de conocimiento en el turno actual.
+def _build_augmented_user_message(
+    user_input: str, contexto: str, resumen_cartera: str = ""
+) -> dict:
+    """Inyecta el contexto recuperado de la base de conocimiento (y, si aplica,
+    el resumen de cartera) en el turno actual.
 
     Solo se usa para la invocacion al agente (no se persiste ni se guarda en el
     historial en memoria) para que el prompt del sistema pueda exigir exclusividad
     sobre ese contexto en la respuesta.
     """
     bloque_contexto = contexto or "(sin resultados relevantes en la base de conocimiento)"
-    return {
-        "role": "user",
-        "content": (
-            f"{user_input}\n\n---\n"
-            "Contexto recuperado de la base de conocimiento interna "
-            "(puede no ser relevante si el mensaje es charla casual):\n"
-            f"{bloque_contexto}"
-        ),
-    }
+    content = (
+        f"{user_input}\n\n---\n"
+        "Contexto recuperado de la base de conocimiento interna "
+        "(puede no ser relevante si el mensaje es charla casual):\n"
+        f"{bloque_contexto}"
+    )
+    if resumen_cartera:
+        content += f"\n\n---\nDatos de tu cartera de cuentas por cobrar:\n{resumen_cartera}"
+    return {"role": "user", "content": content}
 
 
 def _format_sources(fuentes: list[dict]) -> str:
@@ -155,18 +163,25 @@ def iniciar_sesion(ruc: str) -> Sesion:
     )
 
 
-def _fase_label(fuentes: list[dict], quiere_internet: bool) -> str:
+def _fase_label(
+    fuentes: list[dict], quiere_internet: bool, consulta_cartera: bool = False
+) -> str:
     """Etiqueta determinista de que fuente se esta consultando, calculada con la
     misma informacion que ya se resuelve antes de invocar al LLM (fuentes de
-    retrieve_context, gate de busqueda en internet). La usa la API web como
-    indicador de progreso mientras se espera la respuesta (ver app/api.py); no
-    participa en ninguna decision del flujo, solo describe lo ya decidido."""
-    sources = sorted({f["source"] for f in fuentes if f.get("source")})
-    fuente_txt = " y ".join(sources)
-    if fuente_txt and quiere_internet:
-        return f"Consultando {fuente_txt} y buscando en internet..."
-    if fuente_txt:
-        return f"Consultando {fuente_txt}..."
+    retrieve_context, gate de busqueda en internet, gate de consulta de
+    cartera). La usa la API web como indicador de progreso mientras se espera
+    la respuesta (ver app/api.py); no participa en ninguna decision del flujo,
+    solo describe lo ya decidido."""
+    fuentes_txt = []
+    if consulta_cartera:
+        fuentes_txt.append("tu cartera")
+    fuentes_txt.extend(sorted({f["source"] for f in fuentes if f.get("source")}))
+    combinado = " y ".join(fuentes_txt)
+
+    if combinado and quiere_internet:
+        return f"Consultando {combinado} y buscando en internet..."
+    if combinado:
+        return f"Consultando {combinado}..."
     if quiere_internet:
         return "Buscando en internet..."
     return "Generando respuesta..."
@@ -214,10 +229,29 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
             contexto, fuentes = "", []
             avisos.append(f"No se pudo consultar la base de conocimiento: {type(exc).__name__}")
 
-        quiere_internet = wants_internet_search(user_input)
-        yield ("fase", _fase_label(fuentes, quiere_internet))
+        consulta_cartera = wants_cartera_consulta(user_input)
+        resumen_cartera = ""
+        if consulta_cartera:
+            try:
+                resumen_cartera = obtener_resumen_cartera(sesion.usuario["ruc"])
+            except Exception as exc:
+                avisos.append(f"No se pudo consultar tu cartera: {type(exc).__name__}")
+            try:
+                contexto_completo, fuentes_completo = obtener_contexto_recomendaciones()
+                if contexto_completo:
+                    contexto, fuentes = contexto_completo, fuentes_completo
+            except Exception as exc:
+                avisos.append(
+                    f"No se pudo consultar las recomendaciones de cartera: {type(exc).__name__}"
+                )
 
-        invoke_messages = [*messages[:-1], _build_augmented_user_message(user_input, contexto)]
+        quiere_internet = wants_internet_search(user_input)
+        yield ("fase", _fase_label(fuentes, quiere_internet, consulta_cartera))
+
+        invoke_messages = [
+            *messages[:-1],
+            _build_augmented_user_message(user_input, contexto, resumen_cartera),
+        ]
         agent = sesion.agent_con_internet if quiere_internet else sesion.agent_sin_internet
         try:
             result = agent.invoke({"messages": invoke_messages})

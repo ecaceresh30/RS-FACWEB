@@ -69,6 +69,33 @@ def retrieve_context(consulta: str) -> tuple[str, list[dict]]:
     return contexto, fuentes
 
 
+@with_retry
+def retrieve_full_document(source: str) -> tuple[str, list[dict]]:
+    """Trae el contenido completo (todos los chunks, en orden) de un documento
+    puntual de `documentos`, sin pasar por el top-K de retrieve_context.
+
+    Se usa cuando un gate deterministico (ej. consultar_cartera) ya sabe con
+    certeza que un documento especifico y corto es relevante: confiar en el
+    top-K generico arriesga dejar fuera secciones clave (ej. la lista de
+    entidades de factoring) segun como haya quedado rankeada la similitud con
+    la pregunta puntual del usuario. Devuelve ("", []) si el source no existe.
+    """
+    client = get_supabase_client()
+    response = (
+        client.table("documentos")
+        .select("content, metadata")
+        .eq("metadata->>source", source)
+        .execute()
+    )
+    filas = sorted(response.data, key=lambda r: r.get("metadata", {}).get("chunk_index", 0))
+    if not filas:
+        return "", []
+
+    contexto = "\n\n---\n\n".join(f["content"] for f in filas)
+    fuentes = [{"source": source, "page": f.get("metadata", {}).get("page")} for f in filas]
+    return contexto, fuentes
+
+
 @tool
 def buscar_conocimiento(consulta: str) -> str:
     """Busca informacion relevante en la base de conocimiento interna (conocimiento.pdf)
