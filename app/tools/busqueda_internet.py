@@ -14,6 +14,13 @@ def busqueda_internet(consulta: str) -> str:
     informacion externa/actual que no esta en la base de conocimiento interna.
     Esta tool solo se expone al agente cuando el usuario pide explicitamente
     'busca en internet' en su mensaje.
+
+    Formula `consulta` de forma especifica: incluye el nombre propio exacto
+    (empresa, persona, lugar) y que se quiere saber (ej. "empresa <nombre> a
+    que se dedica, rubro"), no solo el nombre solo. Si los resultados no son
+    concluyentes, llama a esta tool de nuevo con una consulta reformulada
+    (variaciones del nombre, sinonimos) antes de concluir que no hay
+    informacion disponible.
     """
     settings = load_settings()
     if not settings.tavily_api_key:

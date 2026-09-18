@@ -219,10 +219,12 @@ def seleccionar_tabla_cartera(tabla: dict | None, user_input: str) -> dict | Non
     """Recorta `tabla` a solo las listas (tramos, facturas vencidas) que el
     usuario realmente pidio, usando las mismas categorias/palabras clave que
     sugerir_preguntas_cartera. Una pregunta puntual (ej. "a cuanto asciende el
-    monto total") no debe traer una tabla: la respuesta es una cifra, no una
-    lista. Si la pregunta es abierta (no menciona ninguna categoria de dato
-    puntual) se devuelven ambas listas, porque en ese caso la respuesta natural
-    del LLM cubre todo el resumen. None si no hay nada que mostrar en tabla."""
+    monto total") o un pedido de recomendacion/evaluacion (ej. "que me
+    recomiendas") no deben traer tabla: la respuesta es una cifra o un analisis
+    en prosa, no una lista. Si la pregunta es completamente abierta (no
+    menciona ninguna categoria puntual) se devuelven ambas listas, porque en
+    ese caso la respuesta natural del LLM cubre todo el resumen. None si no
+    hay nada que mostrar en tabla."""
     if not tabla:
         return None
 
@@ -230,8 +232,9 @@ def seleccionar_tabla_cartera(tabla: dict | None, user_input: str) -> dict | Non
     pide_monto = _contiene_alguna_palabra(mensaje, CATEGORIA_KEYWORDS["monto"])
     pide_tramos = _contiene_alguna_palabra(mensaje, CATEGORIA_KEYWORDS["tramos"])
     pide_vencidas = _contiene_alguna_palabra(mensaje, CATEGORIA_KEYWORDS["facturas_vencidas"])
+    pide_recomendacion = _contiene_alguna_palabra(mensaje, CATEGORIA_KEYWORDS["recomendacion"])
 
-    if not pide_monto and not pide_tramos and not pide_vencidas:
+    if not pide_monto and not pide_tramos and not pide_vencidas and not pide_recomendacion:
         return tabla
 
     seleccion = {

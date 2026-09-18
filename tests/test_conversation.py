@@ -310,7 +310,8 @@ def test_procesar_turno_cartera_question_injects_resumen_into_agent_call(
     assert resultado.respuesta.startswith("Tu cartera esta sana.")
     mock_obtener_resumen_cartera.assert_called_once_with("20100047218")
     mock_obtener_tabla_cartera.assert_called_once_with("20100047218")
-    assert resultado.tabla_cartera == tabla
+    # Pidio una recomendacion (no un dato puntual ni una lista): sin tabla.
+    assert resultado.tabla_cartera is None
     # consulta_cartera=True se salta el RAG generico (su resultado terminaria
     # descartado de todas formas), no vale la pena pagar esa llamada.
     mock_retrieve_context.assert_not_called()

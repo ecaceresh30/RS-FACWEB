@@ -169,3 +169,24 @@ def test_seleccionar_tabla_cartera_pregunta_abierta_incluye_todo():
     resultado = seleccionar_tabla_cartera(_TABLA_EJEMPLO, "como esta mi cartera?")
 
     assert resultado == _TABLA_EJEMPLO
+
+
+def test_seleccionar_tabla_cartera_pregunta_de_recomendacion_no_muestra_tabla():
+    """Pedir solo una recomendacion produce un analisis en prosa, no una
+    lista de tramos/facturas: no corresponde ninguna tabla (bug reportado:
+    "que recomendaciones de factoring tienes" traia ambas tablas de todas
+    formas porque no mencionaba monto/tramo/factura explicitamente)."""
+    resultado = seleccionar_tabla_cartera(
+        _TABLA_EJEMPLO, "¿Qué recomendaciones de factoring o financiamiento tienes para mi cartera?"
+    )
+
+    assert resultado is None
+
+
+def test_seleccionar_tabla_cartera_recomendacion_mas_tramos_incluye_solo_tramos():
+    resultado = seleccionar_tabla_cartera(
+        _TABLA_EJEMPLO, "como se distribuye por tramo de mora y que me recomiendas?"
+    )
+
+    assert resultado["tramos"] == _TABLA_EJEMPLO["tramos"]
+    assert resultado["facturas_vencidas"] == []
