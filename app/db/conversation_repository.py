@@ -36,3 +36,11 @@ def touch_conversation(conversacion_id: str) -> None:
     client.table("conversaciones").update({"updated_at": now}).eq(
         "id", conversacion_id
     ).execute()
+
+
+@with_retry
+def delete_by_usuario(usuario_ruc: str) -> None:
+    """Borra todas las conversaciones del usuario. Llamar despues de borrar sus
+    mensajes (message_repository.delete_by_conversaciones)."""
+    client = get_supabase_client()
+    client.table("conversaciones").delete().eq("usuario_ruc", usuario_ruc).execute()

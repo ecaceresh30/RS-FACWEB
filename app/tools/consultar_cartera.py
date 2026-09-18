@@ -17,9 +17,53 @@ RECOMENDACIONES_PDF = "recomendaciones_cartera.pdf"
 
 TRAMOS_ORDEN = ("vigente", "1-30", "31-60", "61-90", "90+")
 
+MAX_PREGUNTAS_SUGERIDAS = 3
+
+# Categorias de preguntas sobre cartera. Cada una trae sus palabras clave (para
+# no repetir una categoria que el usuario ya toco en su mensaje) y la pregunta
+# sugerida asociada. Todas incluyen la palabra "cartera" a proposito: si el
+# usuario hace click y la reenvia tal cual, debe volver a activar
+# wants_cartera_consulta (mismo gatillo determinista de siempre).
+CATEGORIAS_SUGERENCIAS: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "monto",
+        ("monto", "total", "cuanto", "cuánto", "asciende", "suma"),
+        "¿A cuánto asciende el monto total pendiente de cobro en mi cartera?",
+    ),
+    (
+        "tramos",
+        ("tramo", "mora", "vencimiento", "antiguedad", "antigüedad"),
+        "¿Cómo se distribuye mi cartera por tramo de mora?",
+    ),
+    (
+        "facturas_vencidas",
+        ("factura", "vencid", "cliente"),
+        "¿Cuáles son las facturas más vencidas de mi cartera?",
+    ),
+    (
+        "recomendacion",
+        ("recomien", "conviene", "financia", "factoring", "liquidez", "caja", "opcion", "opción"),
+        "¿Qué recomendaciones de factoring o financiamiento tienes para mi cartera?",
+    ),
+)
+
 
 def wants_cartera_consulta(user_input: str) -> bool:
     return CARTERA_TRIGGER in user_input.lower()
+
+
+def sugerir_preguntas_cartera(user_input: str) -> list[str]:
+    """Hasta MAX_PREGUNTAS_SUGERIDAS preguntas de seguimiento sobre cartera,
+    relacionadas con la pregunta principal del usuario: se excluyen las
+    categorias que el mensaje ya toco, para no repetir lo que ya se respondio.
+    Deterministico (sin LLM), consistente con el resto del gating de esta tool."""
+    mensaje = user_input.lower()
+    candidatas = [
+        pregunta
+        for _categoria, palabras_clave, pregunta in CATEGORIAS_SUGERENCIAS
+        if not any(palabra in mensaje for palabra in palabras_clave)
+    ]
+    return candidatas[:MAX_PREGUNTAS_SUGERIDAS]
 
 
 def obtener_contexto_recomendaciones() -> tuple[str, list[dict]]:

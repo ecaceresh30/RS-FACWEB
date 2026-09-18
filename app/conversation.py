@@ -17,6 +17,7 @@ from app.tools.consultar_api_externa import consultar_ruc
 from app.tools.consultar_cartera import (
     obtener_contexto_recomendaciones,
     obtener_resumen_cartera,
+    sugerir_preguntas_cartera,
     wants_cartera_consulta,
 )
 
@@ -51,6 +52,7 @@ class Sesion:
 class ResultadoTurno:
     respuesta: str
     avisos: list[str] = field(default_factory=list)
+    sugerencias: list[str] = field(default_factory=list)
 
 
 def _strip_fuente_suffix(content: str) -> str:
@@ -206,6 +208,7 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
     except Exception as exc:
         avisos.append(f"No se pudo guardar tu mensaje en el historial: {type(exc).__name__}")
 
+    sugerencias: list[str] = []
     ruc_buscado = RUC_SEARCH_PATTERN.search(user_input)
     if ruc_buscado:
         yield ("fase", "Consultando OpenRuc...")
@@ -234,6 +237,8 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
         if consulta_cartera:
             try:
                 resumen_cartera = obtener_resumen_cartera(sesion.usuario["ruc"])
+                if resumen_cartera:
+                    sugerencias = sugerir_preguntas_cartera(user_input)
             except Exception as exc:
                 avisos.append(f"No se pudo consultar tu cartera: {type(exc).__name__}")
             try:
@@ -272,7 +277,26 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
     except Exception as exc:
         avisos.append(f"No se pudo guardar este turno en el historial: {type(exc).__name__}")
 
-    yield ("resultado", ResultadoTurno(respuesta=respuesta_mostrada, avisos=avisos))
+    yield (
+        "resultado",
+        ResultadoTurno(respuesta=respuesta_mostrada, avisos=avisos, sugerencias=sugerencias),
+    )
+
+
+def reiniciar_historial(sesion: Sesion) -> None:
+    """Borra todo el historial de conversaciones/mensajes del RUC logueado en
+    Supabase y arranca una conversacion nueva vacia (para el boton "eliminar
+    historial" del frontend). Muta sesion in place: agent_sin_internet /
+    agent_con_internet no guardan estado propio, no hace falta reconstruirlos."""
+    ruc = sesion.usuario["ruc"]
+    conversaciones = conversation_repository.get_conversations_by_usuario(ruc)
+    conversacion_ids = [c["id"] for c in conversaciones]
+
+    message_repository.delete_by_conversaciones(conversacion_ids)
+    conversation_repository.delete_by_usuario(ruc)
+
+    sesion.conversacion = conversation_repository.create_conversation(ruc)
+    sesion.messages = []
 
 
 def procesar_turno(sesion: Sesion, user_input: str) -> ResultadoTurno:

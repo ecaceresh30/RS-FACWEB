@@ -19,6 +19,7 @@ from app.conversation import (
     TurnoError,
     iniciar_sesion,
     procesar_turno_stream,
+    reiniciar_historial,
 )
 
 app = FastAPI(title="Agente Conversacional - MVP")
@@ -41,6 +42,10 @@ class LoginRequest(BaseModel):
 class ChatRequest(BaseModel):
     ruc: str
     mensaje: str
+
+
+class ResetRequest(BaseModel):
+    ruc: str
 
 
 @app.post("/api/login")
@@ -93,12 +98,33 @@ def chat(body: ChatRequest):
                         "tipo": "resultado",
                         "respuesta": payload.respuesta,
                         "avisos": payload.avisos,
+                        "sugerencias": payload.sugerencias,
                     }
                 yield json.dumps(evento, ensure_ascii=False) + "\n"
         except TurnoError as exc:
             yield json.dumps({"tipo": "error", "detalle": str(exc)}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
+@app.post("/api/reset")
+def reset(body: ResetRequest):
+    """Borra el historial de conversaciones del RUC logueado (Supabase) y arranca
+    una conversacion nueva vacia. Usado por el boton "Eliminar historial" del
+    frontend (web/app.js)."""
+    sesion = _SESIONES.get(body.ruc)
+    if sesion is None:
+        raise HTTPException(status_code=400, detail="Primero inicia sesion con /api/login.")
+
+    try:
+        reiniciar_historial(sesion)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo eliminar el historial ({type(exc).__name__}).",
+        ) from exc
+
+    return {"historial": sesion.messages}
 
 
 @app.get("/api/health")

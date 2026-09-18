@@ -14,6 +14,7 @@ from app.conversation import (
     cargar_historial,
     iniciar_sesion,
     procesar_turno,
+    reiniciar_historial,
 )
 
 
@@ -271,6 +272,26 @@ def test_procesar_turno_cartera_question_injects_resumen_into_agent_call(
     assert "contenido completo de recomendaciones" in contenido
     assert "algo irrelevante" not in contenido
     assert "Fuente: recomendaciones_cartera.pdf, pag. 1" in resultado.respuesta
+    assert 0 < len(resultado.sugerencias) <= 3
+    assert all("cartera" in s.lower() for s in resultado.sugerencias)
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
+@patch("app.conversation.obtener_resumen_cartera")
+@patch("app.conversation.retrieve_context")
+def test_procesar_turno_cartera_question_sin_datos_no_genera_sugerencias(
+    mock_retrieve_context, mock_obtener_resumen_cartera, mock_message_repo, mock_conv_repo
+):
+    mock_retrieve_context.return_value = ("", [])
+    mock_obtener_resumen_cartera.return_value = ""
+    agent = MagicMock()
+    agent.invoke.return_value = {"messages": [MagicMock(content="No tienes cartera registrada.")]}
+    sesion = _fake_sesion(agent=agent)
+
+    resultado = procesar_turno(sesion, "como esta mi cartera?")
+
+    assert resultado.sugerencias == []
 
 
 @patch("app.conversation.conversation_repository")
@@ -301,3 +322,45 @@ def test_procesar_turno_ruc_search_error_raises_turno_error(mock_consultar_ruc, 
         assert False, "deberia haber lanzado TurnoError"
     except TurnoError:
         pass
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
+def test_reiniciar_historial_borra_mensajes_antes_que_conversaciones(
+    mock_message_repo, mock_conv_repo
+):
+    orden = MagicMock()
+    orden.attach_mock(mock_message_repo.delete_by_conversaciones, "borrar_mensajes")
+    orden.attach_mock(mock_conv_repo.delete_by_usuario, "borrar_conversaciones")
+
+    mock_conv_repo.get_conversations_by_usuario.return_value = [
+        {"id": "conv-1"},
+        {"id": "conv-2"},
+    ]
+    mock_conv_repo.create_conversation.return_value = {"id": "conv-nueva"}
+    sesion = _fake_sesion(agent=MagicMock())
+    sesion.messages = [{"role": "user", "content": "algo viejo"}]
+
+    reiniciar_historial(sesion)
+
+    mock_message_repo.delete_by_conversaciones.assert_called_once_with(["conv-1", "conv-2"])
+    mock_conv_repo.delete_by_usuario.assert_called_once_with("20100047218")
+    # El orden importa: mensajes se borran antes que las conversaciones (FK sin cascade).
+    assert [c[0] for c in orden.mock_calls] == ["borrar_mensajes", "borrar_conversaciones"]
+    mock_conv_repo.create_conversation.assert_called_once_with("20100047218")
+    assert sesion.conversacion == {"id": "conv-nueva"}
+    assert sesion.messages == []
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
+def test_reiniciar_historial_sin_conversaciones_previas(mock_message_repo, mock_conv_repo):
+    mock_conv_repo.get_conversations_by_usuario.return_value = []
+    mock_conv_repo.create_conversation.return_value = {"id": "conv-nueva"}
+    sesion = _fake_sesion(agent=MagicMock())
+
+    reiniciar_historial(sesion)
+
+    mock_message_repo.delete_by_conversaciones.assert_called_once_with([])
+    mock_conv_repo.delete_by_usuario.assert_called_once_with("20100047218")
+    assert sesion.messages == []

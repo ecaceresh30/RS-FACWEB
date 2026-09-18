@@ -24,3 +24,14 @@ def get_messages(conversacion_id: str) -> list[dict]:
         .execute()
     )
     return response.data
+
+
+@with_retry
+def delete_by_conversaciones(conversacion_ids: list[str]) -> None:
+    """Borra todos los mensajes de las conversaciones dadas. Debe llamarse antes
+    de borrar esas conversaciones (conversaciones.delete_by_usuario): mensajes
+    referencia conversacion_id sin ON DELETE CASCADE."""
+    if not conversacion_ids:
+        return
+    client = get_supabase_client()
+    client.table("mensajes").delete().in_("conversacion_id", conversacion_ids).execute()

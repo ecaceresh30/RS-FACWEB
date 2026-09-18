@@ -8,6 +8,7 @@
   const chatMessages = document.getElementById("chat-messages");
   const chatForm = document.getElementById("chat-form");
   const chatInput = document.getElementById("chat-input");
+  const resetButton = document.getElementById("reset-button");
 
   let rucActual = null;
 
@@ -18,6 +19,26 @@
     chatMessages.appendChild(bubble);
     chatMessages.scrollTop = chatMessages.scrollHeight;
     return bubble;
+  }
+
+  function addSugerencias(preguntas) {
+    if (!preguntas || preguntas.length === 0) return;
+
+    const contenedor = document.createElement("div");
+    contenedor.className = "sugerencias";
+    preguntas.forEach((pregunta) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "sugerencia-chip";
+      chip.textContent = pregunta;
+      chip.addEventListener("click", () => {
+        contenedor.remove();
+        enviarMensaje(pregunta);
+      });
+      contenedor.appendChild(chip);
+    });
+    chatMessages.appendChild(contenedor);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
   function addFaseBubble(textoInicial) {
@@ -45,6 +66,19 @@
   function setLoading(form, loading) {
     const button = form.querySelector("button");
     button.disabled = loading;
+  }
+
+  async function resetHistorial(ruc) {
+    const response = await fetch("/api/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ruc }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "No se pudo eliminar el historial.");
+    }
+    return data;
   }
 
   async function login(ruc) {
@@ -142,9 +176,7 @@
     }
   });
 
-  chatForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const mensaje = chatInput.value.trim();
+  async function enviarMensaje(mensaje) {
     if (!mensaje || !rucActual) return;
 
     addBubble("user", mensaje);
@@ -160,12 +192,37 @@
       faseBubble.remove();
       (data.avisos || []).forEach((aviso) => addBubble("system", `Aviso: ${aviso}`));
       addBubble("assistant", data.respuesta);
+      addSugerencias(data.sugerencias);
     } catch (err) {
       faseBubble.remove();
       addBubble("system", err.message);
     } finally {
       setLoading(chatForm, false);
       chatInput.focus();
+    }
+  }
+
+  chatForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    enviarMensaje(chatInput.value.trim());
+  });
+
+  resetButton.addEventListener("click", async () => {
+    if (!rucActual) return;
+    const confirmado = window.confirm(
+      "Esto elimina todo tu historial de conversaciones y no se puede deshacer. ¿Continuar?"
+    );
+    if (!confirmado) return;
+
+    resetButton.disabled = true;
+    try {
+      await resetHistorial(rucActual);
+      chatMessages.innerHTML = "";
+      addBubble("system", "Historial eliminado. Empezando de nuevo.");
+    } catch (err) {
+      addBubble("system", err.message);
+    } finally {
+      resetButton.disabled = false;
     }
   });
 })();
