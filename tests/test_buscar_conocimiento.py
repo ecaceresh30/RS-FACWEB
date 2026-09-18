@@ -64,6 +64,49 @@ def test_retrieve_context_filters_out_low_similarity_matches(
 @patch("app.tools.buscar_conocimiento.get_supabase_client")
 @patch("app.tools.buscar_conocimiento.OpenAIEmbeddings")
 @patch("app.tools.buscar_conocimiento.load_settings")
+def test_retrieve_context_locks_to_top_source_and_drops_other_documents(
+    mock_settings, mock_embeddings_cls, mock_get_client
+):
+    """Con dos documentos en la tabla, un match de un source distinto al del
+    top-1 debe descartarse aunque supere MIN_SIMILARITY (caso real: preguntas de
+    SIRE trayendo chunks de conocimiento.pdf sobre un procedimiento distinto)."""
+    mock_settings.return_value = MagicMock(openai_api_key="sk-test")
+    mock_embeddings_cls.return_value.embed_query.return_value = [0.1]
+
+    client = MagicMock()
+    client.rpc.return_value.execute.return_value = MagicMock(
+        data=[
+            {
+                "content": "chunk sire 1",
+                "similarity": 0.60,
+                "metadata": {"source": "conocimiento_sire.pdf", "page": 1},
+            },
+            {
+                "content": "chunk conocimiento intruso",
+                "similarity": 0.46,
+                "metadata": {"source": "conocimiento.pdf", "page": 29},
+            },
+            {
+                "content": "chunk sire 2",
+                "similarity": 0.45,
+                "metadata": {"source": "conocimiento_sire.pdf", "page": 4},
+            },
+        ]
+    )
+    mock_get_client.return_value = client
+
+    contexto, fuentes = retrieve_context("como se subsana una diferencia en el SIRE?")
+
+    assert contexto == "chunk sire 1\n\n---\n\nchunk sire 2"
+    assert fuentes == [
+        {"source": "conocimiento_sire.pdf", "page": 1},
+        {"source": "conocimiento_sire.pdf", "page": 4},
+    ]
+
+
+@patch("app.tools.buscar_conocimiento.get_supabase_client")
+@patch("app.tools.buscar_conocimiento.OpenAIEmbeddings")
+@patch("app.tools.buscar_conocimiento.load_settings")
 def test_retrieve_context_no_matches(mock_settings, mock_embeddings_cls, mock_get_client):
     mock_settings.return_value = MagicMock(openai_api_key="sk-test")
     mock_embeddings_cls.return_value.embed_query.return_value = [0.1]
