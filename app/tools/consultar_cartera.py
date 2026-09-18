@@ -62,7 +62,13 @@ CATEGORIAS_SUGERENCIAS: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ),
     (
         "facturas_vencidas",
-        ("factura", "vencid", "cliente"),
+        # "cliente" se sacó de esta lista: es una palabra generica de negocio
+        # (aparece en marketing/ventas/CRM) que no tiene nada que ver con
+        # cuentas por cobrar - matcheaba "cartera de clientes potenciales" en
+        # una pregunta de marketing y filtraba deuda real con nombre y monto
+        # (ver hallazgo de pruebas, docs/informe.txt). "factura"/"vencid" son
+        # especificas de este dominio y no tienen ese problema.
+        ("factura", "vencid"),
         "¿Cuáles son las facturas más vencidas de mi cartera?",
     ),
     (
@@ -222,9 +228,14 @@ def seleccionar_tabla_cartera(tabla: dict | None, user_input: str) -> dict | Non
     monto total") o un pedido de recomendacion/evaluacion (ej. "que me
     recomiendas") no deben traer tabla: la respuesta es una cifra o un analisis
     en prosa, no una lista. Si la pregunta es completamente abierta (no
-    menciona ninguna categoria puntual) se devuelven ambas listas, porque en
-    ese caso la respuesta natural del LLM cubre todo el resumen. None si no
-    hay nada que mostrar en tabla."""
+    menciona ninguna categoria puntual) se devuelve el agregado por tramo,
+    pero NO el detalle nominal de facturas/clientes (mas sensible: nombres de
+    clientes y montos de deuda) salvo que se pida explicitamente: el gate de
+    "cartera" es literal (substring), y "cartera"/"cliente" pueden aparecer en
+    una pregunta que no tiene nada que ver con cuentas por cobrar (ej.
+    "cartera de clientes potenciales" en una pregunta de marketing) - en ese
+    caso no corresponde filtrar deuda real de clientes con nombre y apellido.
+    None si no hay nada que mostrar en tabla."""
     if not tabla:
         return None
 
@@ -235,7 +246,7 @@ def seleccionar_tabla_cartera(tabla: dict | None, user_input: str) -> dict | Non
     pide_recomendacion = _contiene_alguna_palabra(mensaje, CATEGORIA_KEYWORDS["recomendacion"])
 
     if not pide_monto and not pide_tramos and not pide_vencidas and not pide_recomendacion:
-        return tabla
+        return {**tabla, "facturas_vencidas": []}
 
     seleccion = {
         **tabla,

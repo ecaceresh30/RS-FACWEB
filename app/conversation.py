@@ -28,6 +28,13 @@ RUC_PATTERN = re.compile(r"^\d{11}$")
 RUC_SEARCH_PATTERN = re.compile(r"busca\s+(?:al\s+|el\s+)?ruc\s+(\d{11})", re.IGNORECASE)
 FUENTE_SUFFIX_PATTERN = re.compile(r"\n\nFuente:.*$", re.DOTALL)
 
+# El system prompt le sugiere textualmente esta frase para cuando no tiene la
+# informacion (ver app/agent/agent.py). Se usa para no citar una fuente que
+# retrieve_context() encontro por encima del umbral de similitud sin que
+# alcance para responder: citarla de todas formas contradice el "no tengo
+# informacion" de la respuesta (ver docs/informe.txt, hallazgo de pruebas).
+SIN_INFORMACION_PATTERN = re.compile(r"no tengo\s+(esa\s+)?informaci[oó]n", re.IGNORECASE)
+
 
 class RucInvalidoError(Exception):
     """El RUC no tiene el formato esperado (11 digitos numericos)."""
@@ -69,6 +76,12 @@ def _strip_fuente_suffix(content: str) -> str:
     return FUENTE_SUFFIX_PATTERN.sub("", content)
 
 
+def _declina_informacion(respuesta: str) -> bool:
+    """True si la respuesta del LLM indica explicitamente que no tiene la
+    informacion solicitada (frase sugerida por el propio system prompt)."""
+    return bool(SIN_INFORMACION_PATTERN.search(respuesta))
+
+
 def cargar_historial(conversacion_id: str) -> list[dict]:
     return [
         {
@@ -86,6 +99,7 @@ def _build_augmented_user_message(
     contexto: str,
     resumen_cartera: str = "",
     cartera_sin_datos: bool = False,
+    tiene_tabla: bool = False,
 ) -> dict:
     """Inyecta el contexto recuperado de la base de conocimiento (y, si aplica,
     el resumen de cartera, o la ausencia de datos de cartera) en el turno actual.
@@ -107,6 +121,14 @@ def _build_augmented_user_message(
         content += (
             "\n\n---\nEl usuario pregunto por su cartera de cuentas por cobrar, pero no "
             "tiene ninguna factura registrada en el sistema."
+        )
+    if tiene_tabla:
+        # El detalle (tramos y/o facturas) ya se va a mostrar como tabla (ver
+        # seleccionar_tabla_cartera); sin esta nota el LLM repite cada fila en
+        # prosa ademas de la tabla, informacion duplicada e innecesaria.
+        content += (
+            "\n\n---\nNota: el detalle se va a mostrar tambien en una tabla debajo de tu "
+            "respuesta. Da un resumen breve, no repitas cada fila/factura/tramo en tu texto."
         )
     return {"role": "user", "content": content}
 
@@ -300,7 +322,7 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
         invoke_messages = [
             *messages[:-1],
             _build_augmented_user_message(
-                user_input, contexto, resumen_cartera, cartera_sin_datos
+                user_input, contexto, resumen_cartera, cartera_sin_datos, tabla_cartera is not None
             ),
         ]
         agent = sesion.agent_con_internet if quiere_internet else sesion.agent_sin_internet
@@ -313,7 +335,9 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
             ) from exc
 
         respuesta_mostrada = (
-            f"{respuesta_limpia}\n\n{_format_sources(fuentes)}" if fuentes else respuesta_limpia
+            f"{respuesta_limpia}\n\n{_format_sources(fuentes)}"
+            if fuentes and not _declina_informacion(respuesta_limpia)
+            else respuesta_limpia
         )
 
     messages.append({"role": "assistant", "content": respuesta_limpia})

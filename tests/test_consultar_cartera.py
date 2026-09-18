@@ -163,12 +163,28 @@ def test_seleccionar_tabla_cartera_pregunta_de_facturas_solo_incluye_vencidas():
     assert resultado["tramos"] == []
 
 
-def test_seleccionar_tabla_cartera_pregunta_abierta_incluye_todo():
-    """Sin ninguna categoria puntual (pregunta abierta), la respuesta natural
-    del LLM cubre todo el resumen, asi que se muestran ambas listas."""
+def test_seleccionar_tabla_cartera_pregunta_abierta_incluye_tramos_no_facturas():
+    """Sin ninguna categoria puntual (pregunta abierta), se muestra el
+    agregado por tramo, pero NO el detalle nominal de facturas/clientes (mas
+    sensible) a menos que se pida explicitamente."""
     resultado = seleccionar_tabla_cartera(_TABLA_EJEMPLO, "como esta mi cartera?")
 
-    assert resultado == _TABLA_EJEMPLO
+    assert resultado["tramos"] == _TABLA_EJEMPLO["tramos"]
+    assert resultado["facturas_vencidas"] == []
+
+
+def test_seleccionar_tabla_cartera_pregunta_no_financiera_no_filtra_facturas_nominales():
+    """Bug reportado: "cartera"/"cliente" pueden aparecer en una pregunta que
+    no tiene nada que ver con cuentas por cobrar (ej. marketing). El gate de
+    "cartera" es literal y puede activarse igual (limitacion ya documentada),
+    pero no debe filtrar deuda real de clientes con nombre y monto por esa
+    coincidencia de palabra."""
+    resultado = seleccionar_tabla_cartera(
+        _TABLA_EJEMPLO,
+        "quiero hacer crecer mi cartera de clientes potenciales, dame consejos de marketing",
+    )
+
+    assert resultado["facturas_vencidas"] == []
 
 
 def test_seleccionar_tabla_cartera_pregunta_de_recomendacion_no_muestra_tabla():

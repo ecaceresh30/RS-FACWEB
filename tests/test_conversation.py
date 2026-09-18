@@ -8,6 +8,7 @@ from app.conversation import (
     Sesion,
     TurnoError,
     _build_augmented_user_message,
+    _declina_informacion,
     _format_empresa_info,
     _format_sources,
     _strip_fuente_suffix,
@@ -97,6 +98,28 @@ def test_build_augmented_user_message_resumen_tiene_prioridad_sobre_sin_datos():
 
     assert "Datos de tu cartera de cuentas por cobrar" in msg["content"]
     assert "no tiene ninguna factura registrada" not in msg["content"]
+
+
+def test_build_augmented_user_message_con_tabla_pide_resumen_breve():
+    msg = _build_augmented_user_message(
+        "cuales son mis facturas vencidas?", "", tiene_tabla=True
+    )
+
+    assert "se va a mostrar tambien en una tabla" in msg["content"]
+
+
+def test_build_augmented_user_message_sin_tabla_no_agrega_nota():
+    msg = _build_augmented_user_message("hola", "")
+
+    assert "tabla" not in msg["content"]
+
+
+def test_declina_informacion_detecta_frase_sugerida_por_el_prompt():
+    assert _declina_informacion("No tengo esa información en la base de conocimiento.")
+    assert _declina_informacion(
+        "No tengo información sobre el código de error 2800 en la base de conocimiento."
+    )
+    assert not _declina_informacion("Los requisitos son X, Y, Z.")
 
 
 def test_format_sources_with_page():
@@ -260,6 +283,32 @@ def test_procesar_turno_normal_question_uses_agent(mock_retrieve_context, mock_m
 @patch("app.conversation.conversation_repository")
 @patch("app.conversation.message_repository")
 @patch("app.conversation.retrieve_context")
+def test_procesar_turno_no_cita_fuente_cuando_llm_declina_informacion(
+    mock_retrieve_context, mock_message_repo, mock_conv_repo
+):
+    """retrieve_context puede encontrar un chunk por encima del umbral de
+    similitud sin que alcance para responder (ej. pregunta de negocio fuera
+    de los PDFs); si el LLM dice explicitamente que no tiene la informacion,
+    no corresponde citar esa fuente (hallazgo de pruebas, ver informe.txt)."""
+    mock_retrieve_context.return_value = (
+        "chunk debilmente relacionado",
+        [{"source": "conocimiento.pdf", "page": 1}],
+    )
+    agent = MagicMock()
+    agent.invoke.return_value = {
+        "messages": [MagicMock(content="No tengo esa información en la base de conocimiento.")]
+    }
+    sesion = _fake_sesion(agent=agent)
+
+    resultado = procesar_turno(sesion, "cuales son los beneficios tributarios de la ley de amazonia?")
+
+    assert resultado.respuesta == "No tengo esa información en la base de conocimiento."
+    assert "Fuente:" not in resultado.respuesta
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
+@patch("app.conversation.retrieve_context")
 def test_procesar_turno_internet_search_skips_rag_lookup(
     mock_retrieve_context, mock_message_repo, mock_conv_repo
 ):
@@ -367,6 +416,45 @@ def test_procesar_turno_cartera_dato_puntual_no_trae_pdf_de_recomendaciones(
     contenido = invoke_args["messages"][-1]["content"]
     assert "Datos de tu cartera de cuentas por cobrar" in contenido
     assert "sin resultados relevantes en la base de conocimiento" in contenido
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
+@patch("app.conversation.obtener_contexto_recomendaciones")
+@patch("app.conversation.obtener_tabla_cartera")
+@patch("app.conversation.obtener_resumen_cartera")
+@patch("app.conversation.retrieve_context")
+def test_procesar_turno_cartera_con_tabla_pide_resumen_breve_al_llm(
+    mock_retrieve_context,
+    mock_obtener_resumen_cartera,
+    mock_obtener_tabla_cartera,
+    mock_obtener_contexto_recomendaciones,
+    mock_message_repo,
+    mock_conv_repo,
+):
+    """Cuando va a haber tabla (ej. pregunta de tramos), el LLM debe recibir
+    la nota de que el detalle ya se muestra en tabla, para no repetirlo en
+    prosa (pedido: "debe prevalecer la tabla")."""
+    mock_obtener_resumen_cartera.return_value = "Monto total pendiente: S/ 673,692.39"
+    tabla = {
+        "total_facturas": 64,
+        "monto_total": 673692.39,
+        "tramos": [{"tramo": "vigente", "cantidad": 16, "monto": 178410.59}],
+        "facturas_vencidas": [],
+    }
+    mock_obtener_tabla_cartera.return_value = tabla
+    agent = MagicMock()
+    agent.invoke.return_value = {
+        "messages": [MagicMock(content="Tu cartera esta distribuida en varios tramos.")]
+    }
+    sesion = _fake_sesion(agent=agent)
+
+    resultado = procesar_turno(sesion, "como se distribuye mi cartera por tramo de mora?")
+
+    assert resultado.tabla_cartera is not None
+    invoke_args = agent.invoke.call_args[0][0]
+    contenido = invoke_args["messages"][-1]["content"]
+    assert "se va a mostrar tambien en una tabla" in contenido
 
 
 @patch("app.conversation.conversation_repository")
