@@ -155,10 +155,32 @@ def iniciar_sesion(ruc: str) -> Sesion:
     )
 
 
-def procesar_turno(sesion: Sesion, user_input: str) -> ResultadoTurno:
-    """Procesa un turno de conversacion. Muta sesion.messages in place (agrega
-    el turno de usuario y la respuesta limpia, sin cita). Devuelve el texto a
-    mostrar (con cita si aplica) y avisos no fatales (fallos de persistencia)."""
+def _fase_label(fuentes: list[dict], quiere_internet: bool) -> str:
+    """Etiqueta determinista de que fuente se esta consultando, calculada con la
+    misma informacion que ya se resuelve antes de invocar al LLM (fuentes de
+    retrieve_context, gate de busqueda en internet). La usa la API web como
+    indicador de progreso mientras se espera la respuesta (ver app/api.py); no
+    participa en ninguna decision del flujo, solo describe lo ya decidido."""
+    sources = sorted({f["source"] for f in fuentes if f.get("source")})
+    fuente_txt = " y ".join(sources)
+    if fuente_txt and quiere_internet:
+        return f"Consultando {fuente_txt} y buscando en internet..."
+    if fuente_txt:
+        return f"Consultando {fuente_txt}..."
+    if quiere_internet:
+        return "Buscando en internet..."
+    return "Generando respuesta..."
+
+
+def _procesar_turno_gen(sesion: Sesion, user_input: str):
+    """Generador interno compartido por procesar_turno (CLI, bloqueante) y
+    procesar_turno_stream (API web, streaming). Muta sesion.messages in place
+    (agrega el turno de usuario y la respuesta limpia, sin cita).
+
+    Yields ('fase', texto) tan pronto se conoce la fuente que se va a consultar
+    (antes de invocar al LLM) y al final ('resultado', ResultadoTurno) con el
+    texto a mostrar (con cita si aplica) y avisos no fatales (fallos de
+    persistencia)."""
     avisos: list[str] = []
     conversacion = sesion.conversacion
     messages = sesion.messages
@@ -171,6 +193,7 @@ def procesar_turno(sesion: Sesion, user_input: str) -> ResultadoTurno:
 
     ruc_buscado = RUC_SEARCH_PATTERN.search(user_input)
     if ruc_buscado:
+        yield ("fase", "Consultando OpenRuc...")
         try:
             datos = consultar_ruc(ruc_buscado.group(1))
         except Exception as exc:
@@ -191,8 +214,11 @@ def procesar_turno(sesion: Sesion, user_input: str) -> ResultadoTurno:
             contexto, fuentes = "", []
             avisos.append(f"No se pudo consultar la base de conocimiento: {type(exc).__name__}")
 
+        quiere_internet = wants_internet_search(user_input)
+        yield ("fase", _fase_label(fuentes, quiere_internet))
+
         invoke_messages = [*messages[:-1], _build_augmented_user_message(user_input, contexto)]
-        agent = sesion.agent_con_internet if wants_internet_search(user_input) else sesion.agent_sin_internet
+        agent = sesion.agent_con_internet if quiere_internet else sesion.agent_sin_internet
         try:
             result = agent.invoke({"messages": invoke_messages})
             respuesta_limpia = result["messages"][-1].content
@@ -212,4 +238,21 @@ def procesar_turno(sesion: Sesion, user_input: str) -> ResultadoTurno:
     except Exception as exc:
         avisos.append(f"No se pudo guardar este turno en el historial: {type(exc).__name__}")
 
-    return ResultadoTurno(respuesta=respuesta_mostrada, avisos=avisos)
+    yield ("resultado", ResultadoTurno(respuesta=respuesta_mostrada, avisos=avisos))
+
+
+def procesar_turno(sesion: Sesion, user_input: str) -> ResultadoTurno:
+    """Procesa un turno de conversacion de forma bloqueante (usado por el CLI).
+    Ver _procesar_turno_gen para el detalle del flujo."""
+    for tipo, payload in _procesar_turno_gen(sesion, user_input):
+        if tipo == "resultado":
+            return payload
+    raise TurnoError("El procesamiento del turno no genero un resultado.")
+
+
+def procesar_turno_stream(sesion: Sesion, user_input: str):
+    """Generador publico para la API web: yields ('fase', texto) apenas se
+    conoce la fuente a consultar, y luego ('resultado', ResultadoTurno). Permite
+    mostrar un indicador de progreso real (no simulado) mientras se espera la
+    respuesta del LLM. Ver _procesar_turno_gen."""
+    yield from _procesar_turno_gen(sesion, user_input)

@@ -17,6 +17,29 @@
     bubble.textContent = text;
     chatMessages.appendChild(bubble);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+    return bubble;
+  }
+
+  function addFaseBubble(textoInicial) {
+    const bubble = document.createElement("div");
+    bubble.className = "bubble assistant fase";
+
+    const dots = document.createElement("span");
+    dots.className = "fase-dots";
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement("span");
+      dot.className = "fase-dot";
+      dots.appendChild(dot);
+    }
+
+    const textEl = document.createElement("span");
+    textEl.className = "fase-texto";
+    textEl.textContent = textoInicial;
+
+    bubble.append(dots, textEl);
+    chatMessages.appendChild(bubble);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return { bubble, textEl };
   }
 
   function setLoading(form, loading) {
@@ -37,17 +60,50 @@
     return data;
   }
 
-  async function chat(ruc, mensaje) {
+  async function chat(ruc, mensaje, onFase) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ruc, mensaje }),
     });
-    const data = await response.json();
+
     if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
       throw new Error(data.detail || "No se pudo procesar el mensaje.");
     }
-    return data;
+
+    // La respuesta es NDJSON (una linea JSON por evento): primero 0+ eventos
+    // "fase" con la fuente que se esta consultando, y al final "resultado".
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let resultado = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lineas = buffer.split("\n");
+      buffer = lineas.pop();
+
+      for (const linea of lineas) {
+        if (!linea.trim()) continue;
+        const evento = JSON.parse(linea);
+        if (evento.tipo === "fase") {
+          onFase(evento.texto);
+        } else if (evento.tipo === "error") {
+          throw new Error(evento.detalle || "No se pudo procesar el mensaje.");
+        } else if (evento.tipo === "resultado") {
+          resultado = evento;
+        }
+      }
+    }
+
+    if (!resultado) {
+      throw new Error("No se recibio una respuesta completa del servidor.");
+    }
+    return resultado;
   }
 
   loginForm.addEventListener("submit", async (event) => {
@@ -95,11 +151,17 @@
     chatInput.value = "";
     setLoading(chatForm, true);
 
+    const { bubble: faseBubble, textEl: faseTexto } = addFaseBubble("Procesando...");
+
     try {
-      const data = await chat(rucActual, mensaje);
+      const data = await chat(rucActual, mensaje, (fase) => {
+        faseTexto.textContent = fase;
+      });
+      faseBubble.remove();
       (data.avisos || []).forEach((aviso) => addBubble("system", `Aviso: ${aviso}`));
       addBubble("assistant", data.respuesta);
     } catch (err) {
+      faseBubble.remove();
       addBubble("system", err.message);
     } finally {
       setLoading(chatForm, false);

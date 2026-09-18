@@ -4,8 +4,11 @@ Sesion en memoria por RUC (un solo proceso, sin multi-worker) - suficiente
 para probar el modelo en el VPS. Sirve tambien el frontend estatico (web/).
 """
 
+import json
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -15,7 +18,7 @@ from app.conversation import (
     Sesion,
     TurnoError,
     iniciar_sesion,
-    procesar_turno,
+    procesar_turno_stream,
 )
 
 app = FastAPI(title="Agente Conversacional - MVP")
@@ -66,6 +69,12 @@ def login(body: LoginRequest):
 
 @app.post("/api/chat")
 def chat(body: ChatRequest):
+    """Responde en streaming NDJSON (una linea JSON por evento): primero un
+    evento {"tipo": "fase", "texto": ...} apenas se sabe que fuente se va a
+    consultar (conocimiento.pdf, conocimiento_sire.pdf, internet, OpenRuc, o una
+    combinacion), y al final {"tipo": "resultado", ...} con la respuesta. El
+    frontend (web/app.js) lo usa para mostrar un indicador de progreso real
+    mientras se espera la respuesta del LLM."""
     sesion = _SESIONES.get(body.ruc)
     if sesion is None:
         raise HTTPException(status_code=400, detail="Primero inicia sesion con /api/login.")
@@ -74,12 +83,22 @@ def chat(body: ChatRequest):
     if not mensaje:
         raise HTTPException(status_code=400, detail="El mensaje no puede estar vacio.")
 
-    try:
-        resultado = procesar_turno(sesion, mensaje)
-    except TurnoError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    def event_stream():
+        try:
+            for tipo, payload in procesar_turno_stream(sesion, mensaje):
+                if tipo == "fase":
+                    evento = {"tipo": "fase", "texto": payload}
+                else:
+                    evento = {
+                        "tipo": "resultado",
+                        "respuesta": payload.respuesta,
+                        "avisos": payload.avisos,
+                    }
+                yield json.dumps(evento, ensure_ascii=False) + "\n"
+        except TurnoError as exc:
+            yield json.dumps({"tipo": "error", "detalle": str(exc)}, ensure_ascii=False) + "\n"
 
-    return {"respuesta": resultado.respuesta, "avisos": resultado.avisos}
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 @app.get("/api/health")
