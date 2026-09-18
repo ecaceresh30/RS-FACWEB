@@ -16,6 +16,14 @@
   box-sizing: border-box;
 }
 
+/* .chat-card y .modal-overlay fijan su propio "display" (flex) para cuando
+   estan visibles; sin esta regla, ese display de autor le gana al display:none
+   por defecto del navegador para [hidden], y el elemento "oculto" se sigue
+   viendo. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -263,6 +271,60 @@ button:disabled {
   animation-delay: 0.3s;
 }
 
+.tabla-cartera-bubble {
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tabla-cartera-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.tabla-cartera {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.tabla-cartera caption {
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--navy-800);
+  padding-bottom: 8px;
+}
+
+.tabla-cartera th,
+.tabla-cartera td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tabla-cartera th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.tabla-cartera .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabla-cartera .total-row {
+  font-weight: 700;
+  border-top: 2px solid var(--navy-700);
+}
+
+.tabla-cartera .total-row td {
+  border-bottom: none;
+}
+
 @keyframes fase-bounce {
   0%, 60%, 100% {
     transform: translateY(0);
@@ -325,6 +387,62 @@ button:disabled {
   font-size: 12px;
   color: var(--muted);
   padding: 12px;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 56, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+
+.modal {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(15, 31, 56, 0.25);
+}
+
+.modal h2 {
+  font-size: 17px;
+  margin: 0 0 10px;
+  color: var(--navy-900);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.modal-btn {
+  padding: 10px 16px;
+  font-size: 14px;
+}
+
+.modal-btn--secondary {
+  background: white;
+  color: var(--navy-800);
+  border: 1px solid var(--border);
+}
+
+.modal-btn--secondary:hover {
+  background: var(--bg);
+}
+
+.modal-btn--danger {
+  background: var(--red);
+}
+
+.modal-btn--danger:hover {
+  background: #a10d25;
 }
 
 /* Smartphones y pantallas angostas: el chat debe ocupar todo el alto

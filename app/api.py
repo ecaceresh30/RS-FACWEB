@@ -99,6 +99,7 @@ def chat(body: ChatRequest):
                         "respuesta": payload.respuesta,
                         "avisos": payload.avisos,
                         "sugerencias": payload.sugerencias,
+                        "tabla_cartera": payload.tabla_cartera,
                     }
                 yield json.dumps(evento, ensure_ascii=False) + "\n"
         except TurnoError as exc:

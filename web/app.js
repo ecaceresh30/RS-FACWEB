@@ -9,8 +9,50 @@
   const chatForm = document.getElementById("chat-form");
   const chatInput = document.getElementById("chat-input");
   const resetButton = document.getElementById("reset-button");
+  const confirmModal = document.getElementById("confirm-modal");
+  const confirmModalCancel = document.getElementById("confirm-modal-cancel");
+  const confirmModalAccept = document.getElementById("confirm-modal-accept");
 
   let rucActual = null;
+
+  const ACCIONES_TEXTO = [
+    "Puedo ayudarte con:",
+    "",
+    "- Base de conocimiento interna: preguntas sobre comprobantes electrónicos y el SIRE (SUNAT).",
+    '- Consulta de RUC (OpenRuc): escribe "busca el ruc" + 11 dígitos.',
+    '- Búsqueda en internet (Tavily): escribe "busca en internet" + tu consulta.',
+    '- Cartera de cuentas por cobrar: escribe algo con la palabra "cartera" para ver el estado de tu cartera. Si además quieres recomendaciones de factoring/financiamiento, pídelas explícitamente (ej. "qué me recomiendas", "me conviene el factoring").',
+    "",
+    "Comandos: /limpiar (borra el chat en pantalla), /acciones (esta lista), /preguntas (preguntas de ejemplo).",
+  ].join("\n");
+
+  const PREGUNTAS_EJEMPLO = [
+    "¿Cuáles son los requisitos para el certificado digital del emisor?",
+    "busca el ruc 20131312955",
+    "¿Cómo está mi cartera de cobranza?",
+    "busca en internet las últimas noticias de la SUNAT",
+  ];
+
+  // Comandos locales: se resuelven en el navegador, sin llamar a /api/chat (sin
+  // costo de LLM, y "/limpiar" no toca el historial guardado en Supabase).
+  function manejarComando(mensaje) {
+    const comando = mensaje.toLowerCase();
+    if (comando === "/limpiar") {
+      chatMessages.innerHTML = "";
+      return true;
+    }
+    if (comando === "/acciones") {
+      addBubble("user", mensaje);
+      addBubble("assistant", ACCIONES_TEXTO);
+      return true;
+    }
+    if (comando === "/preguntas") {
+      addBubble("user", mensaje);
+      addSugerencias(PREGUNTAS_EJEMPLO);
+      return true;
+    }
+    return false;
+  }
 
   function addBubble(role, text) {
     const bubble = document.createElement("div");
@@ -19,6 +61,116 @@
     chatMessages.appendChild(bubble);
     chatMessages.scrollTop = chatMessages.scrollHeight;
     return bubble;
+  }
+
+  function formatMonto(n) {
+    return Number(n).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  }
+
+  function crearTablaCartera(caption, columnas, filas, filaTotal) {
+    const table = document.createElement("table");
+    table.className = "tabla-cartera";
+
+    if (caption) {
+      const captionEl = document.createElement("caption");
+      captionEl.textContent = caption;
+      table.appendChild(captionEl);
+    }
+
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    columnas.forEach((col) => {
+      const th = document.createElement("th");
+      th.textContent = col.label;
+      if (col.numerica) th.className = "num";
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    const agregarFila = (fila, esTotal) => {
+      const tr = document.createElement("tr");
+      if (esTotal) tr.className = "total-row";
+      columnas.forEach((col) => {
+        const td = document.createElement("td");
+        td.textContent = fila[col.key];
+        if (col.numerica) td.className = "num";
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    };
+    filas.forEach((fila) => agregarFila(fila, false));
+    if (filaTotal) agregarFila(filaTotal, true);
+    table.appendChild(tbody);
+
+    const wrap = document.createElement("div");
+    wrap.className = "tabla-cartera-wrap";
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  // Tablas deterministas armadas desde los datos crudos (no le pedimos al LLM
+  // que las formatee: nunca seria consistente). Solo se llama cuando el
+  // backend trajo datos reales de cartera (ver app/conversation.py).
+  function addTablaCartera(tabla) {
+    if (!tabla) return;
+    const hayTramos = tabla.tramos && tabla.tramos.length > 0;
+    const hayVencidas = tabla.facturas_vencidas && tabla.facturas_vencidas.length > 0;
+    if (!hayTramos && !hayVencidas) return;
+
+    const contenedor = document.createElement("div");
+    contenedor.className = "bubble assistant tabla-cartera-bubble";
+
+    if (hayTramos) {
+      contenedor.appendChild(
+        crearTablaCartera(
+          "Distribución por tramo de mora",
+          [
+            { key: "tramo", label: "Tramo" },
+            { key: "cantidad", label: "Facturas", numerica: true },
+            { key: "monto", label: "Monto (S/)", numerica: true },
+          ],
+          tabla.tramos.map((t) => ({
+            tramo: t.tramo,
+            cantidad: t.cantidad,
+            monto: formatMonto(t.monto),
+          })),
+          {
+            tramo: "Total",
+            cantidad: tabla.total_facturas,
+            monto: formatMonto(tabla.monto_total),
+          }
+        )
+      );
+    }
+
+    if (hayVencidas) {
+      contenedor.appendChild(
+        crearTablaCartera(
+          "Facturas más vencidas",
+          [
+            { key: "numero", label: "Factura" },
+            { key: "cliente", label: "Cliente" },
+            { key: "monto", label: "Monto (S/)", numerica: true },
+            { key: "dias_vencido", label: "Días vencido", numerica: true },
+          ],
+          tabla.facturas_vencidas.map((f) => ({
+            numero: f.numero,
+            cliente: f.cliente,
+            monto: formatMonto(f.monto),
+            dias_vencido: f.dias_vencido,
+          })),
+          null
+        )
+      );
+    }
+
+    chatMessages.appendChild(contenedor);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
   function addSugerencias(preguntas) {
@@ -192,6 +344,7 @@
       faseBubble.remove();
       (data.avisos || []).forEach((aviso) => addBubble("system", `Aviso: ${aviso}`));
       addBubble("assistant", data.respuesta);
+      addTablaCartera(data.tabla_cartera);
       addSugerencias(data.sugerencias);
     } catch (err) {
       faseBubble.remove();
@@ -204,16 +357,33 @@
 
   chatForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    enviarMensaje(chatInput.value.trim());
+    const mensaje = chatInput.value.trim();
+    if (!mensaje) return;
+    if (manejarComando(mensaje)) {
+      chatInput.value = "";
+      chatInput.focus();
+      return;
+    }
+    enviarMensaje(mensaje);
   });
 
-  resetButton.addEventListener("click", async () => {
-    if (!rucActual) return;
-    const confirmado = window.confirm(
-      "Esto elimina todo tu historial de conversaciones y no se puede deshacer. ¿Continuar?"
-    );
-    if (!confirmado) return;
+  function abrirModalConfirmacion() {
+    confirmModal.hidden = false;
+  }
 
+  function cerrarModalConfirmacion() {
+    confirmModal.hidden = true;
+  }
+
+  resetButton.addEventListener("click", () => {
+    if (!rucActual) return;
+    abrirModalConfirmacion();
+  });
+
+  confirmModalCancel.addEventListener("click", cerrarModalConfirmacion);
+
+  confirmModalAccept.addEventListener("click", async () => {
+    cerrarModalConfirmacion();
     resetButton.disabled = true;
     try {
       await resetHistorial(rucActual);

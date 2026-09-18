@@ -17,8 +17,11 @@ from app.tools.consultar_api_externa import consultar_ruc
 from app.tools.consultar_cartera import (
     obtener_contexto_recomendaciones,
     obtener_resumen_cartera,
+    obtener_tabla_cartera,
+    seleccionar_tabla_cartera,
     sugerir_preguntas_cartera,
     wants_cartera_consulta,
+    wants_recomendacion_cartera,
 )
 
 RUC_PATTERN = re.compile(r"^\d{11}$")
@@ -53,6 +56,7 @@ class ResultadoTurno:
     respuesta: str
     avisos: list[str] = field(default_factory=list)
     sugerencias: list[str] = field(default_factory=list)
+    tabla_cartera: dict | None = None
 
 
 def _strip_fuente_suffix(content: str) -> str:
@@ -78,10 +82,13 @@ def cargar_historial(conversacion_id: str) -> list[dict]:
 
 
 def _build_augmented_user_message(
-    user_input: str, contexto: str, resumen_cartera: str = ""
+    user_input: str,
+    contexto: str,
+    resumen_cartera: str = "",
+    cartera_sin_datos: bool = False,
 ) -> dict:
     """Inyecta el contexto recuperado de la base de conocimiento (y, si aplica,
-    el resumen de cartera) en el turno actual.
+    el resumen de cartera, o la ausencia de datos de cartera) en el turno actual.
 
     Solo se usa para la invocacion al agente (no se persiste ni se guarda en el
     historial en memoria) para que el prompt del sistema pueda exigir exclusividad
@@ -96,6 +103,11 @@ def _build_augmented_user_message(
     )
     if resumen_cartera:
         content += f"\n\n---\nDatos de tu cartera de cuentas por cobrar:\n{resumen_cartera}"
+    elif cartera_sin_datos:
+        content += (
+            "\n\n---\nEl usuario pregunto por su cartera de cuentas por cobrar, pero no "
+            "tiene ninguna factura registrada en el sistema."
+        )
     return {"role": "user", "content": content}
 
 
@@ -209,6 +221,7 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
         avisos.append(f"No se pudo guardar tu mensaje en el historial: {type(exc).__name__}")
 
     sugerencias: list[str] = []
+    tabla_cartera: dict | None = None
     ruc_buscado = RUC_SEARCH_PATTERN.search(user_input)
     if ruc_buscado:
         yield ("fase", "Consultando OpenRuc...")
@@ -226,36 +239,69 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
             respuesta_limpia = f"No se encontro informacion para el RUC {ruc_buscado.group(1)}."
             respuesta_mostrada = respuesta_limpia
     else:
-        try:
-            contexto, fuentes = retrieve_context(user_input)
-        except Exception as exc:
-            contexto, fuentes = "", []
-            avisos.append(f"No se pudo consultar la base de conocimiento: {type(exc).__name__}")
-
+        quiere_internet = wants_internet_search(user_input)
         consulta_cartera = wants_cartera_consulta(user_input)
+
+        if quiere_internet or consulta_cartera:
+            # Ambas son intenciones exclusivas y deterministicas: en los dos casos
+            # el contexto de retrieve_context() termina descartado o reemplazado
+            # mas abajo (ver ramas de "busca en internet" y de cartera), asi que
+            # ni vale la pena pagar el costo de esa llamada (embeddings + Supabase
+            # RPC) para algo que no se va a usar. Ademas, sin este corte, una
+            # pregunta como "busca en internet noticias de la SUNAT" o "cartera"
+            # puede matchear conocimiento.pdf solo por compartir vocabulario
+            # ("SUNAT"/"cartera") y terminar citandolo sin que la respuesta real
+            # haya salido de ese contexto.
+            contexto, fuentes = "", []
+        else:
+            try:
+                contexto, fuentes = retrieve_context(user_input)
+            except Exception as exc:
+                contexto, fuentes = "", []
+                avisos.append(f"No se pudo consultar la base de conocimiento: {type(exc).__name__}")
+
         resumen_cartera = ""
+        cartera_sin_datos = False
         if consulta_cartera:
             try:
                 resumen_cartera = obtener_resumen_cartera(sesion.usuario["ruc"])
-                if resumen_cartera:
-                    sugerencias = sugerir_preguntas_cartera(user_input)
             except Exception as exc:
                 avisos.append(f"No se pudo consultar tu cartera: {type(exc).__name__}")
-            try:
-                contexto_completo, fuentes_completo = obtener_contexto_recomendaciones()
-                if contexto_completo:
-                    contexto, fuentes = contexto_completo, fuentes_completo
-            except Exception as exc:
-                avisos.append(
-                    f"No se pudo consultar las recomendaciones de cartera: {type(exc).__name__}"
-                )
+            else:
+                cartera_sin_datos = not resumen_cartera
 
-        quiere_internet = wants_internet_search(user_input)
+            if resumen_cartera:
+                sugerencias = sugerir_preguntas_cartera(user_input)
+                try:
+                    tabla_cartera = seleccionar_tabla_cartera(
+                        obtener_tabla_cartera(sesion.usuario["ruc"]), user_input
+                    )
+                except Exception as exc:
+                    avisos.append(
+                        f"No se pudo generar la tabla de tu cartera: {type(exc).__name__}"
+                    )
+                if wants_recomendacion_cartera(user_input):
+                    # Solo se trae (y se cita) el PDF completo de recomendaciones cuando
+                    # el usuario pide explicitamente una recomendacion/evaluacion; para
+                    # una pregunta puntual (ej. el monto total) alcanza con el resumen de
+                    # hechos, y citar el PDF de todas formas resultaria en una fuente que
+                    # el LLM no uso realmente para responder.
+                    try:
+                        contexto_completo, fuentes_completo = obtener_contexto_recomendaciones()
+                        if contexto_completo:
+                            contexto, fuentes = contexto_completo, fuentes_completo
+                    except Exception as exc:
+                        avisos.append(
+                            f"No se pudo consultar las recomendaciones de cartera: {type(exc).__name__}"
+                        )
+
         yield ("fase", _fase_label(fuentes, quiere_internet, consulta_cartera))
 
         invoke_messages = [
             *messages[:-1],
-            _build_augmented_user_message(user_input, contexto, resumen_cartera),
+            _build_augmented_user_message(
+                user_input, contexto, resumen_cartera, cartera_sin_datos
+            ),
         ]
         agent = sesion.agent_con_internet if quiere_internet else sesion.agent_sin_internet
         try:
@@ -279,7 +325,12 @@ def _procesar_turno_gen(sesion: Sesion, user_input: str):
 
     yield (
         "resultado",
-        ResultadoTurno(respuesta=respuesta_mostrada, avisos=avisos, sugerencias=sugerencias),
+        ResultadoTurno(
+            respuesta=respuesta_mostrada,
+            avisos=avisos,
+            sugerencias=sugerencias,
+            tabla_cartera=tabla_cartera,
+        ),
     )
 
 

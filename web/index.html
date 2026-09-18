@@ -52,7 +52,7 @@
         <input
           id="chat-input"
           type="text"
-          placeholder="Escribe tu mensaje... (ej. busca el ruc 20131312955)"
+          placeholder="Escribe aquí tu mensaje"
           autocomplete="off"
         />
         <button type="submit">Enviar</button>
@@ -61,6 +61,23 @@
   </main>
 
   <footer class="footer">MVP &middot; Agente conversacional empresarial</footer>
+
+  <div id="confirm-modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+      <h2 id="confirm-modal-title">¿Estás seguro que deseas eliminar tu historial?</h2>
+      <p class="muted">
+        Esta acción elimina todas tus conversaciones guardadas y no se puede deshacer.
+      </p>
+      <div class="modal-actions">
+        <button type="button" id="confirm-modal-cancel" class="modal-btn modal-btn--secondary">
+          Cancelar
+        </button>
+        <button type="button" id="confirm-modal-accept" class="modal-btn modal-btn--danger">
+          Eliminar
+        </button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

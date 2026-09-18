@@ -3,9 +3,33 @@ from unittest.mock import patch
 from app.tools.consultar_cartera import (
     MAX_PREGUNTAS_SUGERIDAS,
     obtener_resumen_cartera,
+    obtener_tabla_cartera,
+    seleccionar_tabla_cartera,
     sugerir_preguntas_cartera,
     wants_cartera_consulta,
+    wants_recomendacion_cartera,
 )
+
+_FILAS_CARTERA_EJEMPLO = [
+    {
+        "monto_pendiente": 1000.0,
+        "dias_vencido": 0,
+        "tramo_mora": "vigente",
+        "facturas": {"numero": "F001-1", "cliente_nombre": "Cliente A"},
+    },
+    {
+        "monto_pendiente": 500.0,
+        "dias_vencido": 45,
+        "tramo_mora": "31-60",
+        "facturas": {"numero": "F001-2", "cliente_nombre": "Cliente B"},
+    },
+    {
+        "monto_pendiente": 200.0,
+        "dias_vencido": 95,
+        "tramo_mora": "90+",
+        "facturas": {"numero": "F001-3", "cliente_nombre": "Cliente C"},
+    },
+]
 
 
 def test_wants_cartera_consulta_matches_case_insensitive():
@@ -23,26 +47,7 @@ def test_obtener_resumen_cartera_empty_when_no_rows(mock_get_cartera):
 
 @patch("app.tools.consultar_cartera.cartera_repository.get_cartera")
 def test_obtener_resumen_cartera_aggregates_by_tramo_and_lists_overdue(mock_get_cartera):
-    mock_get_cartera.return_value = [
-        {
-            "monto_pendiente": 1000.0,
-            "dias_vencido": 0,
-            "tramo_mora": "vigente",
-            "facturas": {"numero": "F001-1", "cliente_nombre": "Cliente A"},
-        },
-        {
-            "monto_pendiente": 500.0,
-            "dias_vencido": 45,
-            "tramo_mora": "31-60",
-            "facturas": {"numero": "F001-2", "cliente_nombre": "Cliente B"},
-        },
-        {
-            "monto_pendiente": 200.0,
-            "dias_vencido": 95,
-            "tramo_mora": "90+",
-            "facturas": {"numero": "F001-3", "cliente_nombre": "Cliente C"},
-        },
-    ]
+    mock_get_cartera.return_value = _FILAS_CARTERA_EJEMPLO
 
     resumen = obtener_resumen_cartera("20211683199")
 
@@ -73,3 +78,94 @@ def test_sugerir_preguntas_cartera_excludes_recomendacion_if_already_asked():
     sugerencias = sugerir_preguntas_cartera("me recomiendas el factoring para mi cartera?")
 
     assert not any("recomendaciones de factoring" in p.lower() for p in sugerencias)
+
+
+def test_wants_recomendacion_cartera_true_for_recommendation_phrasings():
+    assert wants_recomendacion_cartera("que me recomiendas hacer con mi cartera?")
+    assert wants_recomendacion_cartera("me conviene el factoring?")
+    assert wants_recomendacion_cartera("que deberia hacer con mi cartera?")
+    assert wants_recomendacion_cartera("evalua mi cartera")
+
+
+def test_wants_recomendacion_cartera_false_for_factual_questions():
+    assert not wants_recomendacion_cartera("a cuanto asciende el monto total de mi cartera?")
+    assert not wants_recomendacion_cartera("como se distribuye mi cartera por tramo de mora?")
+
+
+def test_wants_recomendacion_cartera_ignores_substring_false_positives():
+    """"caja" y "opcion" son stems cortos que aparecen dentro de otras palabras
+    sin relacion (encaja, adopcion); solo deben matchear al inicio de palabra."""
+    assert not wants_recomendacion_cartera("el saldo de mi cartera encaja con lo esperado")
+    assert not wants_recomendacion_cartera("la adopcion de este sistema en mi cartera")
+
+
+@patch("app.tools.consultar_cartera.cartera_repository.get_cartera")
+def test_obtener_tabla_cartera_none_when_no_rows(mock_get_cartera):
+    mock_get_cartera.return_value = []
+
+    assert obtener_tabla_cartera("20211683199") is None
+
+
+@patch("app.tools.consultar_cartera.cartera_repository.get_cartera")
+def test_obtener_tabla_cartera_matches_resumen_data(mock_get_cartera):
+    mock_get_cartera.return_value = _FILAS_CARTERA_EJEMPLO
+
+    tabla = obtener_tabla_cartera("20211683199")
+
+    assert tabla["total_facturas"] == 3
+    assert tabla["monto_total"] == 1700.0
+    assert tabla["tramos"] == [
+        {"tramo": "vigente", "cantidad": 1, "monto": 1000.0},
+        {"tramo": "31-60", "cantidad": 1, "monto": 500.0},
+        {"tramo": "90+", "cantidad": 1, "monto": 200.0},
+    ]
+    # Facturas vencidas ordenadas por dias_vencido descendente, igual que el resumen textual.
+    assert [f["numero"] for f in tabla["facturas_vencidas"]] == ["F001-3", "F001-2"]
+    assert tabla["facturas_vencidas"][0] == {
+        "numero": "F001-3",
+        "cliente": "Cliente C",
+        "monto": 200.0,
+        "dias_vencido": 95,
+    }
+
+
+_TABLA_EJEMPLO = {
+    "total_facturas": 3,
+    "monto_total": 1700.0,
+    "tramos": [{"tramo": "vigente", "cantidad": 1, "monto": 1000.0}],
+    "facturas_vencidas": [{"numero": "F001-3", "cliente": "Cliente C", "monto": 200.0, "dias_vencido": 95}],
+}
+
+
+def test_seleccionar_tabla_cartera_none_passthrough():
+    assert seleccionar_tabla_cartera(None, "a cuanto asciende mi cartera?") is None
+
+
+def test_seleccionar_tabla_cartera_pregunta_puntual_de_monto_no_muestra_tabla():
+    """Pedir solo el monto (una cifra, no una lista) no debe traer ninguna
+    tabla, aunque obtener_tabla_cartera haya calculado tramos/vencidas."""
+    resultado = seleccionar_tabla_cartera(_TABLA_EJEMPLO, "a cuanto asciende el monto total?")
+
+    assert resultado is None
+
+
+def test_seleccionar_tabla_cartera_pregunta_de_tramos_solo_incluye_tramos():
+    resultado = seleccionar_tabla_cartera(_TABLA_EJEMPLO, "como se distribuye mi cartera por tramo de mora?")
+
+    assert resultado["tramos"] == _TABLA_EJEMPLO["tramos"]
+    assert resultado["facturas_vencidas"] == []
+
+
+def test_seleccionar_tabla_cartera_pregunta_de_facturas_solo_incluye_vencidas():
+    resultado = seleccionar_tabla_cartera(_TABLA_EJEMPLO, "cuales son las facturas mas vencidas de mi cartera?")
+
+    assert resultado["facturas_vencidas"] == _TABLA_EJEMPLO["facturas_vencidas"]
+    assert resultado["tramos"] == []
+
+
+def test_seleccionar_tabla_cartera_pregunta_abierta_incluye_todo():
+    """Sin ninguna categoria puntual (pregunta abierta), la respuesta natural
+    del LLM cubre todo el resumen, asi que se muestran ambas listas."""
+    resultado = seleccionar_tabla_cartera(_TABLA_EJEMPLO, "como esta mi cartera?")
+
+    assert resultado == _TABLA_EJEMPLO

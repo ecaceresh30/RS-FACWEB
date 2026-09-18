@@ -81,6 +81,24 @@ def test_build_augmented_user_message_without_context():
     assert "sin resultados relevantes" in msg["content"]
 
 
+def test_build_augmented_user_message_cartera_sin_datos():
+    msg = _build_augmented_user_message(
+        "como esta mi cartera?", "", cartera_sin_datos=True
+    )
+
+    assert "no tiene ninguna factura registrada" in msg["content"]
+    assert "Datos de tu cartera de cuentas por cobrar" not in msg["content"]
+
+
+def test_build_augmented_user_message_resumen_tiene_prioridad_sobre_sin_datos():
+    msg = _build_augmented_user_message(
+        "como esta mi cartera?", "", resumen_cartera="Monto total: S/ 100", cartera_sin_datos=True
+    )
+
+    assert "Datos de tu cartera de cuentas por cobrar" in msg["content"]
+    assert "no tiene ninguna factura registrada" not in msg["content"]
+
+
 def test_format_sources_with_page():
     fuentes = [{"source": "conocimiento.pdf", "page": 12}]
 
@@ -241,18 +259,44 @@ def test_procesar_turno_normal_question_uses_agent(mock_retrieve_context, mock_m
 
 @patch("app.conversation.conversation_repository")
 @patch("app.conversation.message_repository")
+@patch("app.conversation.retrieve_context")
+def test_procesar_turno_internet_search_skips_rag_lookup(
+    mock_retrieve_context, mock_message_repo, mock_conv_repo
+):
+    """"busca en internet ... SUNAT ..." puede matchear conocimiento.pdf solo por
+    compartir vocabulario con el manual (ver MIN_SIMILARITY en buscar_conocimiento.py);
+    la busqueda en internet debe ser exclusiva y nunca citar ese match irrelevante."""
+    agent = MagicMock()
+    agent.invoke.return_value = {"messages": [MagicMock(content="Resultado de internet.")]}
+    sesion = _fake_sesion(agent=agent)
+
+    resultado = procesar_turno(sesion, "busca en internet las ultimas noticias de la SUNAT")
+
+    mock_retrieve_context.assert_not_called()
+    assert resultado.respuesta == "Resultado de internet."
+    assert "Fuente:" not in resultado.respuesta
+    invoke_args = agent.invoke.call_args[0][0]
+    contenido = invoke_args["messages"][-1]["content"]
+    assert "sin resultados relevantes en la base de conocimiento" in contenido
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
 @patch("app.conversation.obtener_contexto_recomendaciones")
+@patch("app.conversation.obtener_tabla_cartera")
 @patch("app.conversation.obtener_resumen_cartera")
 @patch("app.conversation.retrieve_context")
 def test_procesar_turno_cartera_question_injects_resumen_into_agent_call(
     mock_retrieve_context,
     mock_obtener_resumen_cartera,
+    mock_obtener_tabla_cartera,
     mock_obtener_contexto_recomendaciones,
     mock_message_repo,
     mock_conv_repo,
 ):
-    mock_retrieve_context.return_value = ("algo irrelevante", [{"source": "conocimiento.pdf"}])
     mock_obtener_resumen_cartera.return_value = "Monto total pendiente: S/ 1,000.00"
+    tabla = {"total_facturas": 1, "monto_total": 1000.0, "tramos": [], "facturas_vencidas": []}
+    mock_obtener_tabla_cartera.return_value = tabla
     mock_obtener_contexto_recomendaciones.return_value = (
         "contenido completo de recomendaciones",
         [{"source": "recomendaciones_cartera.pdf", "page": 1}],
@@ -261,16 +305,19 @@ def test_procesar_turno_cartera_question_injects_resumen_into_agent_call(
     agent.invoke.return_value = {"messages": [MagicMock(content="Tu cartera esta sana.")]}
     sesion = _fake_sesion(agent=agent)
 
-    resultado = procesar_turno(sesion, "como esta mi cartera?")
+    resultado = procesar_turno(sesion, "como esta mi cartera y que me recomiendas hacer?")
 
     assert resultado.respuesta.startswith("Tu cartera esta sana.")
     mock_obtener_resumen_cartera.assert_called_once_with("20100047218")
+    mock_obtener_tabla_cartera.assert_called_once_with("20100047218")
+    assert resultado.tabla_cartera == tabla
+    # consulta_cartera=True se salta el RAG generico (su resultado terminaria
+    # descartado de todas formas), no vale la pena pagar esa llamada.
+    mock_retrieve_context.assert_not_called()
     invoke_args = agent.invoke.call_args[0][0]
     contenido = invoke_args["messages"][-1]["content"]
     assert "Datos de tu cartera de cuentas por cobrar" in contenido
-    # El contexto completo de recomendaciones reemplaza al top-K generico.
     assert "contenido completo de recomendaciones" in contenido
-    assert "algo irrelevante" not in contenido
     assert "Fuente: recomendaciones_cartera.pdf, pag. 1" in resultado.respuesta
     assert 0 < len(resultado.sugerencias) <= 3
     assert all("cartera" in s.lower() for s in resultado.sugerencias)
@@ -278,12 +325,61 @@ def test_procesar_turno_cartera_question_injects_resumen_into_agent_call(
 
 @patch("app.conversation.conversation_repository")
 @patch("app.conversation.message_repository")
+@patch("app.conversation.obtener_contexto_recomendaciones")
+@patch("app.conversation.obtener_tabla_cartera")
+@patch("app.conversation.obtener_resumen_cartera")
+@patch("app.conversation.retrieve_context")
+def test_procesar_turno_cartera_dato_puntual_no_trae_pdf_de_recomendaciones(
+    mock_retrieve_context,
+    mock_obtener_resumen_cartera,
+    mock_obtener_tabla_cartera,
+    mock_obtener_contexto_recomendaciones,
+    mock_message_repo,
+    mock_conv_repo,
+):
+    """Una pregunta puntual (sin pedir recomendacion/evaluacion) no debe traer ni
+    citar el PDF de recomendaciones: el LLM responde solo con el resumen de
+    hechos, y citar un PDF que no se uso resulta confuso (ver bug reportado)."""
+    mock_obtener_resumen_cartera.return_value = "Monto total pendiente: S/ 673,692.39"
+    tabla = {
+        "total_facturas": 64,
+        "monto_total": 673692.39,
+        "tramos": [{"tramo": "vigente", "cantidad": 16, "monto": 178410.59}],
+        "facturas_vencidas": [],
+    }
+    mock_obtener_tabla_cartera.return_value = tabla
+    agent = MagicMock()
+    agent.invoke.return_value = {
+        "messages": [MagicMock(content="El monto total pendiente es S/ 673,692.39.")]
+    }
+    sesion = _fake_sesion(agent=agent)
+
+    resultado = procesar_turno(sesion, "a cuanto asciende el monto total de mi cartera?")
+
+    mock_obtener_contexto_recomendaciones.assert_not_called()
+    mock_retrieve_context.assert_not_called()
+    assert "Fuente:" not in resultado.respuesta
+    # Pregunto solo por el monto (una cifra, no una lista): no corresponde
+    # ninguna tabla, aunque obtener_tabla_cartera haya traido tramos/vencidas.
+    assert resultado.tabla_cartera is None
+    invoke_args = agent.invoke.call_args[0][0]
+    contenido = invoke_args["messages"][-1]["content"]
+    assert "Datos de tu cartera de cuentas por cobrar" in contenido
+    assert "sin resultados relevantes en la base de conocimiento" in contenido
+
+
+@patch("app.conversation.conversation_repository")
+@patch("app.conversation.message_repository")
+@patch("app.conversation.obtener_contexto_recomendaciones")
 @patch("app.conversation.obtener_resumen_cartera")
 @patch("app.conversation.retrieve_context")
 def test_procesar_turno_cartera_question_sin_datos_no_genera_sugerencias(
-    mock_retrieve_context, mock_obtener_resumen_cartera, mock_message_repo, mock_conv_repo
+    mock_retrieve_context,
+    mock_obtener_resumen_cartera,
+    mock_obtener_contexto_recomendaciones,
+    mock_message_repo,
+    mock_conv_repo,
 ):
-    mock_retrieve_context.return_value = ("", [])
     mock_obtener_resumen_cartera.return_value = ""
     agent = MagicMock()
     agent.invoke.return_value = {"messages": [MagicMock(content="No tienes cartera registrada.")]}
@@ -292,6 +388,18 @@ def test_procesar_turno_cartera_question_sin_datos_no_genera_sugerencias(
     resultado = procesar_turno(sesion, "como esta mi cartera?")
 
     assert resultado.sugerencias == []
+    assert resultado.tabla_cartera is None
+    # Sin datos, no tiene sentido traer el PDF de recomendaciones de factoring,
+    # ni el RAG generico (que podria matchear recomendaciones_cartera.pdf solo
+    # por la palabra "cartera" de la pregunta, ver bug reportado).
+    mock_obtener_contexto_recomendaciones.assert_not_called()
+    mock_retrieve_context.assert_not_called()
+    invoke_args = agent.invoke.call_args[0][0]
+    contenido = invoke_args["messages"][-1]["content"]
+    assert "no tiene ninguna factura registrada" in contenido
+    assert "Datos de tu cartera de cuentas por cobrar" not in contenido
+    assert "sin resultados relevantes" in contenido
+    assert "Fuente:" not in resultado.respuesta
 
 
 @patch("app.conversation.conversation_repository")
